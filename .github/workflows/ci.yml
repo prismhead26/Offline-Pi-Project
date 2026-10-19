@@ -1,0 +1,79 @@
+# This runs on a Pi in a car with no internet, so the failure mode that matters
+# is "it did not come back up after a reboot" - discovered at a campsite, not at
+# a desk. CI cannot test the hardware, but it can refuse the things that have
+# actually broken Pi deployments in this lab: a syntax error in a file only
+# loaded at runtime, a systemd unit that will not parse, and a lockfile that no
+# longer matches package.json.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Server and browser JS parse
+        run: |
+          node --check server.js
+          for f in public/js/*.js; do node --check "$f"; echo "ok  $f"; done
+
+      - name: Python parses
+        run: python3 -m py_compile scripts/read_dht.py
+
+      # npm install tolerates a drifted lockfile; npm ci does not. A sibling repo
+      # carried an invalid dependency key for its whole life because nothing had
+      # ever run npm ci. This is that check.
+      - name: Lockfile matches package.json
+        run: npm ci --no-audit --no-fund
+
+      - name: systemd units are well-formed
+        run: |
+          python3 - <<'PY'
+          import configparser, sys
+          bad = []
+          for unit in ('systemd/pi-control.service', 'systemd/tileserver.service'):
+              # systemd allows repeated keys; configparser must not be strict.
+              c = configparser.ConfigParser(strict=False)
+              c.optionxform = str
+              try:
+                  c.read(unit)
+              except Exception as e:
+                  bad.append(f"{unit}: unparseable ({e})")
+                  continue
+              if 'Service' not in c.sections():
+                  bad.append(f"{unit}: no [Service]")
+              elif 'ExecStart' not in c['Service']:
+                  bad.append(f"{unit}: [Service] has no ExecStart")
+              else:
+                  print(f"ok  {unit} -> {c['Service']['ExecStart']}")
+          if bad:
+              sys.exit("\n".join(bad))
+          PY
+
+      # The build script names a file. If it is renamed, the failure shows up as
+      # a blank stylesheet on the dashboard rather than as an error.
+      - name: Build inputs referenced by package.json exist
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          pkg = json.load(open('package.json'))
+          build = pkg['scripts']['build:css']
+          missing = [p for p in re.findall(r'\./[\w./-]+\.css', build)
+                     if p.startswith('./public/css/tailwind-input') and not os.path.exists(p)]
+          print('build:css ->', build)
+          if missing:
+              sys.exit(f"referenced but missing: {missing}")
+          for f in ('tailwind.config.js', 'postcss.config.js', 'public/index.html'):
+              if not os.path.exists(f):
+                  sys.exit(f"missing {f}")
+              print('ok ', f)
+          PY
