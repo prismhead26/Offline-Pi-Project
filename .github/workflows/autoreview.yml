@@ -1,0 +1,29 @@
+# Lab autoreview. The checks are not here - they live in
+# prismhead26/lab-standards/.github/workflows/autoreview.yml and this file only says
+# "this repo is under the standard". That is the point: one place to change a rule,
+# ten repos that pick it up on their next push, and no copy of anything to drift.
+#
+# To switch it off for this repo alone, with no commit:
+#   Settings -> Secrets and variables -> Actions -> Variables -> AUTOREVIEW = off
+# To switch it off everywhere, edit GLOBAL_SWITCH in lab-standards.
+# To make findings fail on main as they do on a PR, set strict: true below.
+name: autoreview
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  autoreview:
+    if: vars.AUTOREVIEW != 'off'
+    uses: prismhead26/lab-standards/.github/workflows/autoreview.yml@main
+    # inherit so the optional ANTHROPIC_API_KEY reaches the review job if this repo
+    # has one. Without it that job no-ops; nothing else needs a secret.
+    secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      strict: false
